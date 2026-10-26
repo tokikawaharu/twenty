@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
-import { isDefined } from 'twenty-shared/utils';
+import { isDefined, isNonEmptyArray } from 'twenty-shared/utils';
+import { doNotTranslate } from 'twenty-shared/i18n';
 import { type EntityManager } from 'typeorm';
 
 import { InjectMessageQueue } from 'src/engine/core-modules/message-queue/decorators/message-queue.decorator';
@@ -119,6 +120,8 @@ const EMPTY_OPEN_THREADS_SUMMARY: AgentChatOpenThreadsSummaryDTO = {
 };
 
 const PARTICIPANT_COLUMNS = `id, "workspaceMemberId", "threadId", "lastReadAt", "archivedAt", "snoozedUntil", "isSubscribed", "lastMentionedAt", "updatedAt"`;
+const AGENT_CHAT_THREAD_PARTICIPANT_LOCK_KEY_PREFIX =
+  'agent-chat-thread-participant:';
 
 // Timestamps compared against thread.lastActivityAt are stamped by Postgres
 // (clock_timestamp), so ordering follows the database rather than app servers.
@@ -202,6 +205,98 @@ export class AgentChatThreadParticipantService {
         ? assertIsNotAssignee
         : writeThread,
     );
+  }
+
+  async moveMembersToInbox({
+    participantWorkspaceMemberIds,
+    ...args
+  }: AgentChatThreadAccessArgs & {
+    participantWorkspaceMemberIds: string[];
+  }): Promise<AgentChatThreadParticipantRow[]> {
+    const memberIds = [...new Set(participantWorkspaceMemberIds)]
+      .filter((memberId) => memberId !== args.workspaceMemberId)
+      .sort();
+
+    if (!isNonEmptyArray(memberIds)) {
+      return [];
+    }
+
+    await this.sharingService.getThreadWithAccess({
+      ...args,
+      operationType: 'update',
+    });
+    const eligibleMemberIds =
+      await this.sharingService.findEligibleParticipantWorkspaceMemberIds({
+        ...args,
+        memberIds,
+        shouldConsiderNewShares: false,
+      });
+
+    if (eligibleMemberIds.length !== memberIds.length) {
+      return throwAgentChatThreadNotFound();
+    }
+
+    const objectMetadataId =
+      await this.sharingService.getParticipantObjectMetadataId(
+        args.workspaceId,
+      );
+    const participantTable = getAgentChatThreadParticipantTable(
+      args.workspaceId,
+    );
+    const writes = await this.threadRepository.query(
+      args.workspaceId,
+      async ({ manager }) => {
+        await manager.query(
+          doNotTranslate(`SELECT pg_advisory_xact_lock(hashtextextended($1 || ':' || member_id::text, 0))
+          FROM unnest($2::uuid[]) member_id ORDER BY member_id`),
+          [
+            `${AGENT_CHAT_THREAD_PARTICIPANT_LOCK_KEY_PREFIX}${args.workspaceId}:${args.threadId}`,
+            memberIds,
+          ],
+        );
+        const before = await manager.query<AgentChatThreadParticipantRow[]>(
+          doNotTranslate(`SELECT ${PARTICIPANT_COLUMNS} FROM ${participantTable}
+          WHERE "threadId" = $1 AND "workspaceMemberId" = ANY($2::uuid[])`),
+          [args.threadId, memberIds],
+        );
+        const after = await manager.query<AgentChatThreadParticipantRow[]>(
+          doNotTranslate(`WITH written_participant AS (
+          INSERT INTO ${participantTable} AS participant ("threadId", "workspaceMemberId")
+          SELECT $1, member_id FROM unnest($2::uuid[]) member_id
+          ON CONFLICT ("threadId", "workspaceMemberId") DO UPDATE SET
+            "archivedAt" = NULL, "snoozedUntil" = NULL, "isSubscribed" = true, "updatedAt" = now()
+          RETURNING *
+        ), owner_share AS (
+          ${buildAgentChatThreadParticipantOwnerShareInsert({
+            workspaceId: args.workspaceId,
+            participantSource: 'written_participant',
+            objectMetadataIdParameter: '$3',
+          })}
+        ) SELECT ${PARTICIPANT_COLUMNS} FROM written_participant`),
+          [args.threadId, memberIds, objectMetadataId],
+        );
+        const beforeByMemberId = new Map(
+          before.map((participant) => [
+            participant.workspaceMemberId,
+            participant,
+          ]),
+        );
+
+        return after.map((participant) => ({
+          before: beforeByMemberId.get(participant.workspaceMemberId) ?? null,
+          after: participant,
+        }));
+      },
+    );
+
+    for (const write of writes) {
+      await this.participantEventService.emitParticipantWritten({
+        workspaceId: args.workspaceId,
+        ...write,
+      });
+    }
+
+    return writes.map(({ after }) => after);
   }
 
   // A mention brings the chat back unread for the mentioned member, who the
@@ -546,7 +641,7 @@ export class AgentChatThreadParticipantService {
       await manager.query(
         'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
         [
-          `agent-chat-thread-participant:${workspaceId}:${threadId}:${workspaceMemberId}`,
+          `${AGENT_CHAT_THREAD_PARTICIPANT_LOCK_KEY_PREFIX}${workspaceId}:${threadId}:${workspaceMemberId}`,
         ],
       );
     }

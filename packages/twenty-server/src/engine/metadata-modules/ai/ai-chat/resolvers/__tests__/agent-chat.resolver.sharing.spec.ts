@@ -1,3 +1,4 @@
+import { Test, type TestingModule } from '@nestjs/testing';
 import {
   AiException,
   AiExceptionCode,
@@ -14,12 +15,33 @@ import {
   TwentyOrmExceptionCode,
 } from 'src/engine/twenty-orm/exceptions/twenty-orm.exception';
 
+import { AgentChatSharingService } from 'src/engine/metadata-modules/ai/ai-chat/services/agent-chat-sharing.service';
+import { AgentChatStreamingService } from 'src/engine/metadata-modules/ai/ai-chat/services/agent-chat-streaming.service';
+import { AgentChatStreamRecoveryService } from 'src/engine/metadata-modules/ai/ai-chat/services/agent-chat-stream-recovery.service';
+import { AgentChatEventPublisherService } from 'src/engine/metadata-modules/ai/ai-chat/services/agent-chat-event-publisher.service';
+import { SystemPromptBuilderService } from 'src/engine/metadata-modules/ai/ai-chat/services/system-prompt-builder.service';
+import { AgentTurnRecorderService } from 'src/engine/metadata-modules/ai/ai-history/services/agent-turn-recorder.service';
+import { WorkspaceCacheService } from 'src/engine/workspace-cache/services/workspace-cache.service';
+import { FeatureFlagService } from 'src/engine/core-modules/feature-flag/services/feature-flag.service';
+import { AgentChatMessageReactionService } from 'src/engine/metadata-modules/ai/ai-chat/services/agent-chat-message-reaction.service';
+import { AgentChatReplyPolicyService } from 'src/engine/metadata-modules/ai/ai-chat/services/agent-chat-reply-policy.service';
+import { AgentChatParticipationService } from 'src/engine/metadata-modules/ai/ai-chat/services/agent-chat-participation.service';
+import { PermissionsService } from 'src/engine/metadata-modules/permissions/permissions.service';
+
 const WORKSPACE_ID = 'workspace';
 const THREAD_ID = 'thread';
 const VIEWER_ID = 'viewer';
 const workspace = { id: WORKSPACE_ID } as never;
 
-const buildResolver = () => {
+const testingModules: TestingModule[] = [];
+
+afterEach(async () => {
+  for (const testingModule of testingModules.splice(0)) {
+    await testingModule.close();
+  }
+});
+
+const buildResolver = async () => {
   const threadRepository = {
     existsBy: jest.fn().mockResolvedValue(true),
     findOne: jest.fn().mockResolvedValue(null),
@@ -27,12 +49,16 @@ const buildResolver = () => {
     delete: jest.fn(),
   };
   const messages = {
+    existsBy: jest.fn().mockResolvedValue(true),
     findOne: jest.fn().mockResolvedValue({ id: 'queued', threadId: THREAD_ID }),
     find: jest.fn(),
     delete: jest.fn(),
     query: jest.fn().mockResolvedValue([]),
   };
   const sharing = {
+    findEligibleParticipantWorkspaceMemberIds: jest
+      .fn()
+      .mockImplementation(async ({ memberIds }) => memberIds),
     createThread: jest.fn().mockResolvedValue({ id: THREAD_ID }),
     getAuthContext: jest.fn().mockResolvedValue({ userWorkspaceId: 'owner' }),
     getReadableThread: jest
@@ -50,6 +76,7 @@ const buildResolver = () => {
           id: THREAD_ID,
           workspaceMemberId: 'owner',
           workspaceId: WORKSPACE_ID,
+          isAssistantParticipant: true,
         };
       }),
     restoreThreadWithAccess: jest
@@ -76,6 +103,9 @@ const buildResolver = () => {
     {} as never,
     {} as never,
   );
+  jest
+    .spyOn(threadService, 'setInitialAssistantParticipation')
+    .mockResolvedValue(undefined);
   const chatService = new AgentChatService(
     threadRepository as never,
     { find: jest.fn().mockResolvedValue([]) } as never,
@@ -116,6 +146,14 @@ const buildResolver = () => {
   const messageReactions = {
     findReactionsByMessageId: jest.fn().mockResolvedValue(new Map()),
   };
+  const replyPolicy = {
+    shouldReply: jest.fn().mockResolvedValue(true),
+  };
+  const participation = {
+    runWithMessageLock: jest.fn().mockImplementation(({ work }) => work()),
+    completeMessage: jest.fn().mockResolvedValue([]),
+    recoverMessage: jest.fn().mockResolvedValue(undefined),
+  };
   const queueService = new AgentChatQueueService(
     {} as never,
     messages as never,
@@ -124,36 +162,63 @@ const buildResolver = () => {
     {} as never,
     threadService,
   );
-  const resolver = new AgentChatResolver(
-    chatService,
-    queueService,
-    threadService,
-    sharing as never,
-    streaming as never,
-    streamRecovery as never,
-    events as never,
-    {} as never,
-    new AgentChatTurnPreflightService(
-      {
-        getAvailableModels: () => ['model'],
-        validateModelAvailability: jest.fn(),
-      } as never,
-      threadService,
-      { assertAiExecutionAllowed: jest.fn() } as never,
-    ),
-    threadLifecycle,
-    { findLatestTurnError: jest.fn().mockResolvedValue(null) } as never,
+  const turnPreflightService = new AgentChatTurnPreflightService(
     {
-      getOrRecompute: jest.fn().mockResolvedValue({
-        flatWorkspaceMemberMaps: {
-          byId: { 'sender-member': { userId: 'sender-user' } },
-          userWorkspaceIdByUserId: { 'sender-user': 'sender-user-workspace' },
-        },
-      }),
+      getAvailableModels: () => ['model'],
+      validateModelAvailability: jest.fn(),
     } as never,
-    featureFlags as never,
-    messageReactions as never,
+    threadService,
+    { assertAiExecutionAllowed: jest.fn() } as never,
   );
+  const testingModule = await Test.createTestingModule({
+    providers: [
+      AgentChatResolver,
+      { provide: AgentChatService, useValue: chatService },
+      { provide: AgentChatQueueService, useValue: queueService },
+      { provide: AgentChatThreadService, useValue: threadService },
+      { provide: AgentChatSharingService, useValue: sharing },
+      { provide: AgentChatStreamingService, useValue: streaming },
+      { provide: AgentChatStreamRecoveryService, useValue: streamRecovery },
+      { provide: AgentChatEventPublisherService, useValue: events },
+      { provide: SystemPromptBuilderService, useValue: {} },
+      {
+        provide: AgentChatTurnPreflightService,
+        useValue: turnPreflightService,
+      },
+      { provide: AgentChatThreadLifecycleService, useValue: threadLifecycle },
+      {
+        provide: AgentTurnRecorderService,
+        useValue: { findLatestTurnError: jest.fn().mockResolvedValue(null) },
+      },
+      {
+        provide: WorkspaceCacheService,
+        useValue: {
+          getOrRecompute: jest.fn().mockResolvedValue({
+            flatWorkspaceMemberMaps: {
+              byId: { 'sender-member': { userId: 'sender-user' } },
+              userWorkspaceIdByUserId: {
+                'sender-user': 'sender-user-workspace',
+              },
+            },
+          }),
+        },
+      },
+      { provide: FeatureFlagService, useValue: featureFlags },
+      { provide: AgentChatMessageReactionService, useValue: messageReactions },
+      { provide: AgentChatReplyPolicyService, useValue: replyPolicy },
+      { provide: AgentChatParticipationService, useValue: participation },
+      {
+        provide: PermissionsService,
+        useValue: {
+          userHasWorkspaceSettingPermission: jest.fn().mockResolvedValue(true),
+        },
+      },
+    ],
+  }).compile();
+
+  testingModules.push(testingModule);
+  const resolver = testingModule.get(AgentChatResolver);
+
   return {
     resolver,
     chatService,
@@ -166,12 +231,14 @@ const buildResolver = () => {
     events,
     redis,
     recordEvents,
+    replyPolicy,
+    participation,
   };
 };
 
 describe('Shared conversation API boundaries', () => {
   it('does not announce a restore when the transaction rolls back', async () => {
-    const context = buildResolver();
+    const context = await buildResolver();
     context.threadRepository.findOne.mockResolvedValue({
       id: THREAD_ID,
       workspaceMemberId: 'owner',
@@ -193,11 +260,12 @@ describe('Shared conversation API boundaries', () => {
 
   it('restores a soft deleted conversation before sending to it', async () => {
     const { resolver, sharing, streaming, recordEvents, threadRepository } =
-      buildResolver();
+      await buildResolver();
     const deletedThread = {
       id: THREAD_ID,
       workspaceMemberId: 'owner',
       workspaceId: WORKSPACE_ID,
+      isAssistantParticipant: true,
       deletedAt: '2026-09-01T00:00:00.000Z',
     };
     sharing.getThreadWithAccess.mockResolvedValue(deletedThread);
@@ -234,7 +302,8 @@ describe('Shared conversation API boundaries', () => {
   });
 
   it('creates the thread of a new chat on its first message', async () => {
-    const { resolver, sharing, threadRepository, streaming } = buildResolver();
+    const { resolver, sharing, threadRepository, streaming } =
+      await buildResolver();
     threadRepository.existsBy.mockResolvedValue(false);
     await resolver.sendChatMessage(
       THREAD_ID,
@@ -258,7 +327,8 @@ describe('Shared conversation API boundaries', () => {
   });
 
   it('does not let a new chat id take over a thread created concurrently by someone else', async () => {
-    const { resolver, sharing, threadRepository, streaming } = buildResolver();
+    const { resolver, sharing, threadRepository, streaming } =
+      await buildResolver();
     threadRepository.existsBy.mockResolvedValue(false);
     sharing.createThread.mockRejectedValue(
       new TwentyOrmException(
@@ -285,7 +355,7 @@ describe('Shared conversation API boundaries', () => {
   });
 
   it('returns readable threads and catchup to viewers without granting ownership', async () => {
-    const { resolver } = buildResolver();
+    const { resolver } = await buildResolver();
     const thread = await resolver.chatThread(THREAD_ID, VIEWER_ID, workspace);
     expect(thread).toMatchObject({ id: THREAD_ID });
     expect(thread).not.toHaveProperty('permissions');
@@ -297,7 +367,7 @@ describe('Shared conversation API boundaries', () => {
   it.each(['send', 'restore', 'deleteQueued'] as const)(
     'rejects %s from a viewer without mutating or executing',
     async (operation) => {
-      const context = buildResolver();
+      const context = await buildResolver();
       const { resolver } = context;
       const operations = {
         send: () =>
@@ -345,11 +415,12 @@ describe('Shared conversation API boundaries', () => {
   );
 
   it('passes the editing participant identity to execution', async () => {
-    const { resolver, sharing, streaming } = buildResolver();
+    const { resolver, sharing, streaming } = await buildResolver();
     sharing.getThreadWithAccess.mockResolvedValue({
       id: THREAD_ID,
       workspaceMemberId: 'owner',
       workspaceId: WORKSPACE_ID,
+      isAssistantParticipant: true,
     });
     await resolver.sendChatMessage(
       THREAD_ID,
@@ -391,7 +462,7 @@ describe('Shared conversation API boundaries', () => {
     );
 
   it('saves a message without starting a turn when the assistant is off', async () => {
-    const { resolver, streaming } = buildResolver();
+    const { resolver, streaming } = await buildResolver();
 
     const result = await sendWithAssistantOff(resolver);
 
@@ -404,7 +475,7 @@ describe('Shared conversation API boundaries', () => {
   });
 
   it('still replies when the assistant is off but the inbox is not enabled', async () => {
-    const { resolver, streaming, featureFlags } = buildResolver();
+    const { resolver, streaming, featureFlags } = await buildResolver();
 
     featureFlags.isFeatureEnabled.mockResolvedValue(false);
 
@@ -415,7 +486,7 @@ describe('Shared conversation API boundaries', () => {
   });
 
   it('adds the mentioned members once the message is sent', async () => {
-    const { resolver, threadService, streaming } = buildResolver();
+    const { resolver, threadService, streaming } = await buildResolver();
     const addParticipants = jest
       .spyOn(threadService, 'addParticipants')
       .mockResolvedValue(['jony']);
@@ -445,7 +516,7 @@ describe('Shared conversation API boundaries', () => {
   });
 
   it('keeps a sent message sent when its mentions cannot be applied', async () => {
-    const { resolver, threadService } = buildResolver();
+    const { resolver, threadService } = await buildResolver();
 
     jest
       .spyOn(threadService, 'addParticipants')
@@ -472,7 +543,7 @@ describe('Shared conversation API boundaries', () => {
   });
 
   it('allows an editor to remove a queued message after update authorization', async () => {
-    const { resolver, sharing, messages } = buildResolver();
+    const { resolver, sharing, messages } = await buildResolver();
     sharing.getThreadWithAccess.mockResolvedValue({
       id: THREAD_ID,
       workspaceMemberId: 'owner',
@@ -490,7 +561,7 @@ describe('Shared conversation API boundaries', () => {
   });
 
   it('does not let ownership bypass a revoked update permission', async () => {
-    const { threadService, sharing } = buildResolver();
+    const { threadService, sharing } = await buildResolver();
     sharing.getThreadWithAccess.mockRejectedValue(
       new AiException('Thread not found', AiExceptionCode.THREAD_NOT_FOUND),
     );
@@ -504,7 +575,7 @@ describe('Shared conversation API boundaries', () => {
   });
 
   it('allows an authorized stop to be a no-op when the thread is idle', async () => {
-    const { resolver, redis } = buildResolver();
+    const { resolver, redis } = await buildResolver();
     await expect(
       resolver.stopAgentChatStream(THREAD_ID, 'owner', workspace),
     ).resolves.toBe(true);
@@ -512,7 +583,7 @@ describe('Shared conversation API boundaries', () => {
   });
 
   it('does not cancel an owner stream when a viewer requests stop', async () => {
-    const { resolver, redis, threadRepository } = buildResolver();
+    const { resolver, redis, threadRepository } = await buildResolver();
     await expect(
       resolver.stopAgentChatStream(THREAD_ID, VIEWER_ID, workspace),
     ).rejects.toMatchObject({ code: 'THREAD_NOT_FOUND' });
@@ -521,7 +592,7 @@ describe('Shared conversation API boundaries', () => {
   });
 
   it('names message senders by their membership for fronts cached from the release before', async () => {
-    const { resolver, messages } = buildResolver();
+    const { resolver, messages } = await buildResolver();
     messages.find.mockResolvedValue([
       { id: 'from-member', senderWorkspaceMemberId: 'sender-member' },
       { id: 'from-agent', senderWorkspaceMemberId: null },
@@ -546,7 +617,7 @@ describe('Shared conversation API boundaries', () => {
   });
 
   it('does not read messages or catchup after access is revoked', async () => {
-    const { resolver, messages, sharing, events } = buildResolver();
+    const { resolver, messages, sharing, events } = await buildResolver();
     sharing.getReadableThread.mockRejectedValue(new Error('access revoked'));
     await expect(
       resolver.chatMessages(THREAD_ID, VIEWER_ID, workspace),

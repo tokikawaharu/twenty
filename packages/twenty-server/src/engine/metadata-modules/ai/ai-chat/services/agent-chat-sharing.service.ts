@@ -393,6 +393,7 @@ export class AgentChatSharingService {
     // filed under done for its owner, until activity brings it back to their inbox
     isArchived?: boolean;
     isSubscribed?: boolean;
+    isAssistantParticipant?: boolean;
     // checked by the caller, as the member must be able to reach it
     channelId?: string;
   }): Promise<AgentChatThreadWorkspaceEntity> {
@@ -422,12 +423,15 @@ export class AgentChatSharingService {
           channelIds: [args.channelId],
         });
         const records = await manager.query<AgentChatThreadWorkspaceEntity[]>(
-          `INSERT INTO ${table('agentChatThread')} (id, title, "workspaceMemberId"${isDefined(args.channelId) ? ', "channelId"' : ''})
-           VALUES ($1, $2, $3${isDefined(args.channelId) ? ', $4' : ''}) RETURNING *`,
+          doNotTranslate(
+            `INSERT INTO ${table('agentChatThread')} (id, title, "workspaceMemberId", "isAssistantParticipant"${isDefined(args.channelId) ? ', "channelId"' : ''})
+           VALUES ($1, $2, $3, $4${isDefined(args.channelId) ? ', $5' : ''}) RETURNING *`,
+          ),
           [
             args.id ?? randomUUID(),
             args.title ?? null,
             authContext.workspaceMemberId,
+            args.isAssistantParticipant ?? true,
             ...(isDefined(args.channelId) ? [args.channelId] : []),
           ],
         );

@@ -1,12 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 import { isDefined, isNonEmptyArray } from 'twenty-shared/utils';
+import { doNotTranslate } from 'twenty-shared/i18n';
 import { In, IsNull } from 'typeorm';
 
 import { DatabaseEventAction } from 'src/engine/api/graphql/graphql-query-runner/enums/database-event-action';
 import { isUserAuthContext } from 'src/engine/core-modules/auth/guards/is-user-auth-context.guard';
 import { type WorkspaceAuthContext } from 'src/engine/core-modules/auth/types/workspace-auth-context.type';
 import { AGENT_CHAT_THREAD_ACTIVITY_COLUMNS } from 'src/engine/metadata-modules/ai/ai-chat/constants/agent-chat-thread-activity-columns.constant';
+import { AgentMessageRole } from 'src/engine/metadata-modules/ai/ai-history/enums/agent-message-role.enum';
 import { AgentChatChannelAccessService } from 'src/engine/metadata-modules/ai/ai-chat/services/agent-chat-channel-access.service';
 import { AgentChatChannelGrantService } from 'src/engine/metadata-modules/ai/ai-chat/services/agent-chat-channel-grant.service';
 import { AgentChatSharingService } from 'src/engine/metadata-modules/ai/ai-chat/services/agent-chat-sharing.service';
@@ -75,10 +77,12 @@ export class AgentChatThreadService {
     threadId,
     title,
     isSubscribed,
+    isAssistantParticipant,
     ...args
   }: AgentChatThreadAccessArgs & {
     title?: string;
     isSubscribed?: boolean;
+    isAssistantParticipant?: boolean;
     channelId?: string;
   }): Promise<boolean> {
     if (
@@ -88,7 +92,13 @@ export class AgentChatThreadService {
     }
 
     try {
-      await this.createThread({ ...args, id: threadId, title, isSubscribed });
+      await this.createThread({
+        ...args,
+        id: threadId,
+        title,
+        isSubscribed,
+        isAssistantParticipant,
+      });
     } catch (error) {
       if (!isUniqueViolationError(error)) {
         throw error;
@@ -325,9 +335,11 @@ export class AgentChatThreadService {
   // it unread in their inbox even if they had read or archived it
   async addParticipants({
     participantWorkspaceMemberIds,
+    isMention = true,
     ...args
   }: AgentChatThreadAccessArgs & {
     participantWorkspaceMemberIds: string[];
+    isMention?: boolean;
   }): Promise<string[]> {
     const thread = await this.getWritableThread(args);
     const candidateMemberIds = [
@@ -362,11 +374,20 @@ export class AgentChatThreadService {
       ),
     );
 
-    for (const participantMemberId of participantMemberIds) {
-      await this.participantService.markAsMentioned({
-        workspaceId: args.workspaceId,
-        threadId: args.threadId,
-        workspaceMemberId: participantMemberId,
+    if (isMention) {
+      for (const participantMemberId of participantMemberIds) {
+        await this.participantService.markAsMentioned({
+          workspaceId: args.workspaceId,
+          workspaceMemberId: participantMemberId,
+          threadId: args.threadId,
+        });
+      }
+    }
+
+    if (!isMention) {
+      await this.participantService.moveMembersToInbox({
+        ...args,
+        participantWorkspaceMemberIds: participantMemberIds,
       });
     }
 
@@ -376,6 +397,97 @@ export class AgentChatThreadService {
     });
 
     return participantMemberIds;
+  }
+
+  async setInitialAssistantParticipation({
+    isAssistantParticipant,
+    ...args
+  }: AgentChatThreadAccessArgs & {
+    isAssistantParticipant: boolean;
+  }): Promise<void> {
+    const thread = await this.getWritableThread(args);
+    const updatedThreads = await this.threadRepository.query(
+      args.workspaceId,
+      ({ manager, table }) =>
+        manager.query<{ id: string }[]>(
+          doNotTranslate(`WITH updated_thread AS (
+           UPDATE ${table('agentChatThread')}
+           SET "isAssistantParticipant" = $2, "updatedAt" = now()
+           WHERE id = $1 AND NOT EXISTS (
+             SELECT 1 FROM ${table('agentMessage')}
+             WHERE "threadId" = $1 AND role <> $3
+           )
+           RETURNING id
+           ) SELECT id FROM updated_thread`),
+          [args.threadId, isAssistantParticipant, AgentMessageRole.SYSTEM],
+        ),
+    );
+
+    if (isNonEmptyArray(updatedThreads)) {
+      await this.threadRecordEventService.emitThreadUpdated({
+        workspaceId: args.workspaceId,
+        threadBefore: thread,
+      });
+    }
+  }
+
+  async isInitialMessage({
+    messageId,
+    ...args
+  }: AgentChatThreadAccessArgs & {
+    messageId: string;
+  }): Promise<boolean> {
+    await this.getWritableThread(args);
+    const messages = await this.threadRepository.query(
+      args.workspaceId,
+      ({ manager, table }) =>
+        manager.query<{ id: string }[]>(
+          doNotTranslate(`SELECT id FROM ${table('agentMessage')}
+           WHERE id = $2 AND "threadId" = $1
+             AND role = $4 AND "senderWorkspaceMemberId" = $5
+           AND id = (
+             SELECT id FROM ${table('agentMessage')}
+             WHERE "threadId" = $1 AND role <> $3
+             ORDER BY "createdAt", id LIMIT 1
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM ${table('agentMessage')}
+             WHERE "threadId" = $1 AND role = $4 AND id <> $2
+           )`),
+          [
+            args.threadId,
+            messageId,
+            AgentMessageRole.SYSTEM,
+            AgentMessageRole.USER,
+            args.workspaceMemberId,
+          ],
+        ),
+    );
+
+    return isNonEmptyArray(messages);
+  }
+
+  async addAssistantParticipant(
+    args: AgentChatThreadAccessArgs,
+  ): Promise<AgentChatThreadWorkspaceEntity> {
+    const thread = await this.getWritableThread(args);
+
+    if (thread.isAssistantParticipant) {
+      return thread;
+    }
+
+    await this.threadRepository.update(
+      args.workspaceId,
+      { id: args.threadId, isAssistantParticipant: false },
+      { isAssistantParticipant: true },
+    );
+
+    await this.threadRecordEventService.emitThreadUpdated({
+      workspaceId: args.workspaceId,
+      threadBefore: thread,
+    });
+
+    return { ...thread, isAssistantParticipant: true };
   }
 
   // An assignee who could not reply is given edit access, as Front lets an

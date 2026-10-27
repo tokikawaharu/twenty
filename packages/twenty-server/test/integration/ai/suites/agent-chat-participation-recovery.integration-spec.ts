@@ -30,7 +30,7 @@ describe('Chat participation acceptance and recovery with real storage', () => {
   it('does not deliver recipients when a failed send never stored its message', async () => {
     const threadId = await context.createThread(false);
 
-    await context.participationService.recoverMessage(
+    await context.participationService.completeMessage(
       participationArguments(threadId),
     );
 
@@ -50,8 +50,8 @@ describe('Chat participation acceptance and recovery with real storage', () => {
       messageId: message.id,
     };
 
-    await context.participationService.recoverMessage(messageArguments);
-    await context.participationService.recoverMessage(messageArguments);
+    await context.participationService.completeMessage(messageArguments);
+    await context.participationService.completeMessage(messageArguments);
 
     const recipients = (await context.readParticipants(threadId)).filter(
       ({ workspaceMemberId }) =>

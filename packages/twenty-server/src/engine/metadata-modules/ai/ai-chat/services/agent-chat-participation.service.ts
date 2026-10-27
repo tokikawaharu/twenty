@@ -13,6 +13,12 @@ const AGENT_CHAT_MESSAGE_LOCK_KEY_PREFIX = 'agent-chat-message:';
 const AGENT_CHAT_MESSAGE_LOCK_WAIT_MS = 30_000;
 const AGENT_CHAT_MESSAGE_LOCK_RETRY_INTERVAL_MS = 100;
 
+type AgentChatMessageParticipationArgs = AgentChatThreadAccessArgs & {
+  messageId: string;
+  isAssistantMentioned: boolean;
+  recipientWorkspaceMemberIds: string[];
+};
+
 @Injectable()
 export class AgentChatParticipationService {
   private readonly logger = new Logger(AgentChatParticipationService.name);
@@ -45,30 +51,30 @@ export class AgentChatParticipationService {
     );
   }
 
-  async recoverMessage(
-    args: Parameters<AgentChatParticipationService['completeMessage']>[0],
-  ): Promise<void> {
+  // The message may already be saved, so participation that cannot be applied
+  // leaves the chat unchanged rather than failing the send
+  async completeMessage(
+    args: AgentChatMessageParticipationArgs,
+  ): Promise<string[]> {
     try {
-      await this.completeMessage(args);
+      return await this.applyMessageParticipation(args);
     } catch (error) {
       this.logger.warn(
         doNotTranslate(
-          `Could not recover participants for chat message ${args.messageId} in thread ${args.threadId} of workspace ${args.workspaceId}: ${formatErrorWithCause(error)}`,
+          `Could not apply participation for chat message ${args.messageId} in thread ${args.threadId} of workspace ${args.workspaceId}: ${formatErrorWithCause(error)}`,
         ),
       );
+
+      return [];
     }
   }
 
-  async completeMessage({
+  private async applyMessageParticipation({
     messageId,
     isAssistantMentioned,
     recipientWorkspaceMemberIds,
     ...args
-  }: AgentChatThreadAccessArgs & {
-    messageId: string;
-    isAssistantMentioned: boolean;
-    recipientWorkspaceMemberIds: string[];
-  }): Promise<string[]> {
+  }: AgentChatMessageParticipationArgs): Promise<string[]> {
     const isMessageSaved = await this.chatService.hasMessage({
       workspaceId: args.workspaceId,
       threadId: args.threadId,
@@ -93,20 +99,10 @@ export class AgentChatParticipationService {
       return [];
     }
 
-    try {
-      return await this.threadService.addParticipants({
-        ...args,
-        participantWorkspaceMemberIds: recipientWorkspaceMemberIds,
-        isMention: false,
-      });
-    } catch (error) {
-      this.logger.warn(
-        doNotTranslate(
-          `Could not add recipients for message ${messageId} in thread ${args.threadId} of workspace ${args.workspaceId}: ${formatErrorWithCause(error)}`,
-        ),
-      );
-
-      return [];
-    }
+    return this.threadService.addParticipants({
+      ...args,
+      participantWorkspaceMemberIds: recipientWorkspaceMemberIds,
+      isMention: false,
+    });
   }
 }

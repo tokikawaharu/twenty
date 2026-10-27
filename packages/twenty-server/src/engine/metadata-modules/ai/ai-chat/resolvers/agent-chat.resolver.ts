@@ -278,7 +278,7 @@ export class AgentChatResolver {
           recipientWorkspaceMemberIds: recipientWorkspaceMemberIds ?? [],
         }).catch(async (error: unknown) => {
           if (isAiChatInboxEnabled) {
-            await this.participationService.recoverMessage(
+            await this.participationService.completeMessage(
               participationArguments,
             );
           }

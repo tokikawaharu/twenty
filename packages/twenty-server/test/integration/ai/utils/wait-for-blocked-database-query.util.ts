@@ -1,0 +1,26 @@
+const DATABASE_WAITER_TIMEOUT_MS = 5_000;
+const DATABASE_WAITER_POLL_INTERVAL_MS = 20;
+
+export const waitForBlockedDatabaseQuery = async (blockingPid: number) => {
+  const deadline = Date.now() + DATABASE_WAITER_TIMEOUT_MS;
+
+  while (Date.now() < deadline) {
+    const [{ isBlocked }]: { isBlocked: boolean }[] =
+      await global.testDataSource.query(
+        'SELECT EXISTS (SELECT FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))) AS "isBlocked"',
+        [blockingPid],
+      );
+
+    if (isBlocked) {
+      return;
+    }
+
+    await new Promise((resolve) =>
+      setTimeout(resolve, DATABASE_WAITER_POLL_INTERVAL_MS),
+    );
+  }
+
+  throw new Error(
+    'The competing conversation creation did not wait for its ID',
+  );
+};

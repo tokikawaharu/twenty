@@ -28,6 +28,8 @@ describe('Assistant reply selection with stored conversation participants', () =
     isAssistantMentioned?: boolean;
   }) =>
     context.replyPolicyService.shouldReply({
+      isAiChatInboxEnabled: true,
+      shouldAssistantReply: true,
       thread: await context.threadService.getWritableThread({
         threadId,
         workspaceId: context.workspaceId,

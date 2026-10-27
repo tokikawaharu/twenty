@@ -74,8 +74,16 @@ export const createChatParticipationTestContext = async () => {
       id: threadId,
       workspaceId,
       workspaceMemberId,
-      isAssistantParticipant,
     });
+
+    if (!isAssistantParticipant) {
+      await threadService.setInitialAssistantParticipation({
+        threadId,
+        workspaceId,
+        workspaceMemberId,
+        isAssistantParticipant,
+      });
+    }
 
     return threadId;
   };

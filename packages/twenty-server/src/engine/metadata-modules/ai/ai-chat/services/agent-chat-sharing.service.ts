@@ -2,6 +2,7 @@ import { AgentChatChannelGrantService } from 'src/engine/metadata-modules/ai/ai-
 import { AuthException } from 'src/engine/core-modules/auth/auth.exception';
 import { randomUUID } from 'node:crypto';
 import { buildAgentChatThreadParticipantOwnerShareInsert } from 'src/engine/metadata-modules/ai/ai-chat/utils/build-agent-chat-thread-participant-owner-share-insert.util';
+import { hasAgentChatThreadAssistantParticipantField } from 'src/engine/metadata-modules/ai/ai-chat/utils/has-agent-chat-thread-assistant-participant-field.util';
 import { hasAgentChatThreadChannelField } from 'src/engine/metadata-modules/ai/ai-chat/utils/has-agent-chat-thread-channel-field.util';
 import { getAgentChatThreadParticipantTable } from 'src/engine/metadata-modules/ai/ai-chat/utils/get-agent-chat-thread-participant-table.util';
 import { backfillWorkspaceChatThreadOwnerGrants } from 'src/engine/metadata-modules/ai/ai-chat/utils/backfill-workspace-chat-thread-owner-grants.util';
@@ -75,6 +76,19 @@ export class AgentChatSharingService {
       ]);
 
     return hasAgentChatThreadChannelField({ flatFieldMetadataMaps });
+  }
+
+  // TODO(@bosiraphael): remove once 2.53 leaves the cross-upgrade window. Until
+  // the 2.53 participation command reaches a workspace, its chats lack the column
+  async hasAssistantParticipation(workspaceId: string): Promise<boolean> {
+    const { flatFieldMetadataMaps } =
+      await this.workspaceCacheService.getOrRecompute(workspaceId, [
+        'flatFieldMetadataMaps',
+      ]);
+
+    return hasAgentChatThreadAssistantParticipantField({
+      flatFieldMetadataMaps,
+    });
   }
 
   async getParticipantObjectMetadataId(workspaceId: string): Promise<string> {
@@ -393,7 +407,6 @@ export class AgentChatSharingService {
     // filed under done for its owner, until activity brings it back to their inbox
     isArchived?: boolean;
     isSubscribed?: boolean;
-    isAssistantParticipant?: boolean;
     // checked by the caller, as the member must be able to reach it
     channelId?: string;
   }): Promise<AgentChatThreadWorkspaceEntity> {
@@ -423,15 +436,12 @@ export class AgentChatSharingService {
           channelIds: [args.channelId],
         });
         const records = await manager.query<AgentChatThreadWorkspaceEntity[]>(
-          doNotTranslate(
-            `INSERT INTO ${table('agentChatThread')} (id, title, "workspaceMemberId", "isAssistantParticipant"${isDefined(args.channelId) ? ', "channelId"' : ''})
-           VALUES ($1, $2, $3, $4${isDefined(args.channelId) ? ', $5' : ''}) RETURNING *`,
-          ),
+          `INSERT INTO ${table('agentChatThread')} (id, title, "workspaceMemberId"${isDefined(args.channelId) ? ', "channelId"' : ''})
+           VALUES ($1, $2, $3${isDefined(args.channelId) ? ', $4' : ''}) RETURNING *`,
           [
             args.id ?? randomUUID(),
             args.title ?? null,
             authContext.workspaceMemberId,
-            args.isAssistantParticipant ?? true,
             ...(isDefined(args.channelId) ? [args.channelId] : []),
           ],
         );

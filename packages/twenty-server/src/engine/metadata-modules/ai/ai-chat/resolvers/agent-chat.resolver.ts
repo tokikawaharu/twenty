@@ -348,8 +348,11 @@ export class AgentChatResolver {
       workspaceId: workspace.id,
     });
 
-    const isInitialMessage =
+    const canStoreAssistantParticipation =
       isAiChatInboxEnabled &&
+      (await this.sharingService.hasAssistantParticipation(workspace.id));
+    const isInitialMessage =
+      canStoreAssistantParticipation &&
       (await this.threadService.setInitialAssistantParticipation({
         threadId,
         workspaceId: workspace.id,
@@ -372,7 +375,7 @@ export class AgentChatResolver {
         : [];
     const isAssistantParticipating = isInitialMessage
       ? initialIsAssistantParticipant
-      : thread.isAssistantParticipant;
+      : !canStoreAssistantParticipation || thread.isAssistantParticipant;
     const isAssistantReplying = await this.replyPolicyService.shouldReply({
       isAiChatInboxEnabled,
       shouldAssistantReply,

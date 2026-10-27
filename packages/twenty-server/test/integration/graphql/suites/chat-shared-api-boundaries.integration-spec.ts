@@ -430,7 +430,6 @@ describe('Shared conversation API boundaries', () => {
       id: threadId,
       workspaceId: context.workspaceId,
       workspaceMemberId: WORKSPACE_MEMBER_DATA_SEED_IDS.JONY,
-      isAssistantParticipant: false,
     });
     await runWithReadOnlyChatPermission({
       workspaceId: context.workspaceId,

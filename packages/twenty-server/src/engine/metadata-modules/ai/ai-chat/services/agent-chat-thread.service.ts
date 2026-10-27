@@ -77,12 +77,10 @@ export class AgentChatThreadService {
     threadId,
     title,
     isSubscribed,
-    isAssistantParticipant,
     ...args
   }: AgentChatThreadAccessArgs & {
     title?: string;
     isSubscribed?: boolean;
-    isAssistantParticipant?: boolean;
     channelId?: string;
   }): Promise<boolean> {
     if (
@@ -92,13 +90,7 @@ export class AgentChatThreadService {
     }
 
     try {
-      await this.createThread({
-        ...args,
-        id: threadId,
-        title,
-        isSubscribed,
-        isAssistantParticipant,
-      });
+      await this.createThread({ ...args, id: threadId, title, isSubscribed });
     } catch (error) {
       if (!isUniqueViolationError(error)) {
         throw error;
@@ -458,7 +450,10 @@ export class AgentChatThreadService {
   ): Promise<AgentChatThreadWorkspaceEntity> {
     const thread = await this.getWritableThread(args);
 
-    if (thread.isAssistantParticipant) {
+    if (
+      thread.isAssistantParticipant ||
+      !(await this.sharingService.hasAssistantParticipation(args.workspaceId))
+    ) {
       return thread;
     }
 

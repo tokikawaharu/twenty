@@ -460,9 +460,8 @@ describe('Shared conversation API boundaries', () => {
 
     await runner.connect();
     await runner.startTransaction();
-    const [{ pid }]: { pid: number }[] = await runner.query(
-      'SELECT pg_backend_pid() AS pid',
-    );
+    const [{ backendProcessId }]: { backendProcessId: number }[] =
+      await runner.query('SELECT pg_backend_pid() AS "backendProcessId"');
     await runner.query(
       `INSERT INTO "${context.schema}"."agentChatThread" (id, "workspaceMemberId") VALUES ($1, $2)`,
       [threadId, context.workspaceMemberId],
@@ -473,7 +472,7 @@ describe('Shared conversation API boundaries', () => {
     }).then((response) => response);
 
     try {
-      await waitForBlockedDatabaseQueryOrThrow(pid);
+      await waitForBlockedDatabaseQueryOrThrow(backendProcessId);
       await runner.commitTransaction();
       const response = await sending;
 

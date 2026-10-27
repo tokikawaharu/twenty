@@ -22,6 +22,7 @@ import { type AgentMessagePartWorkspaceEntity } from 'src/engine/metadata-module
 import { type AgentMessageWorkspaceEntity } from 'src/engine/metadata-modules/ai/ai-history/standard-objects/agent-message.workspace-entity';
 import { type AgentTurnWorkspaceEntity } from 'src/engine/metadata-modules/ai/ai-history/standard-objects/agent-turn.workspace-entity';
 import { type AgentConversationActor } from 'src/engine/metadata-modules/ai/ai-history/types/agent-conversation-actor.type';
+import { type AgentConversationMessageText } from 'src/engine/metadata-modules/ai/ai-history/types/agent-conversation-message-text.type';
 import { filterPartsOfTurnActedByOthers } from 'src/engine/metadata-modules/ai/ai-history/utils/filter-parts-of-turn-acted-by-others.util';
 import { findTurnIdsActedByOthers } from 'src/engine/metadata-modules/ai/ai-history/utils/find-turn-ids-acted-by-others.util';
 
@@ -80,16 +81,9 @@ export class AgentConversationReaderService {
     workspaceId: string;
     threadId: string;
     limit: number;
-  }): Promise<
-    { role: AgentMessageRole.USER | AgentMessageRole.ASSISTANT; text: string }[]
-  > {
+  }): Promise<AgentConversationMessageText[]> {
     return this.messageRepository.query(workspaceId, ({ manager, table }) =>
-      manager.query<
-        {
-          role: AgentMessageRole.USER | AgentMessageRole.ASSISTANT;
-          text: string;
-        }[]
-      >(
+      manager.query<AgentConversationMessageText[]>(
         doNotTranslate(`WITH recent_messages AS (
           SELECT message.id, message.role, message."processedAt", message."createdAt"
           FROM ${table('agentMessage')} message

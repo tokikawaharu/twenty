@@ -94,7 +94,7 @@ const addToPrioritized = async ({
   );
 
 // The double keeps BullMQ's prioritized, delayed and active keys and the
-// priority field of each job hash in Redis, which is what the rebase rewrites
+// priority and opts fields of each job hash in Redis, which is what the rebase reads and rewrites
 const mockBullMQ: BullMQDouble = {
   now: 0,
   jobs: [],
@@ -129,6 +129,11 @@ const mockBullMQ: BullMQDouble = {
     mockBullMQ.jobs.push(job);
 
     await mockBullMQ.redis?.hset(buildJobKey(job.id), 'priority', priority);
+    await mockBullMQ.redis?.hset(
+      buildJobKey(job.id),
+      'opts',
+      JSON.stringify(options),
+    );
 
     if (!job.isPromoted) {
       await mockBullMQ.redis?.zadd(DELAYED_KEY, job.timestamp, job.id);

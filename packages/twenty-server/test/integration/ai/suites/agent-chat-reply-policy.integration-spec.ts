@@ -103,13 +103,8 @@ describe('Assistant reply selection with stored conversation participants', () =
     },
   );
 
-  it('answers an explicit mention even when JEV declines', async () => {
+  it('answers an explicit mention without evaluating it', async () => {
     models.enableEvaluation();
-    models.evaluate.mockResolvedValue({
-      answers: { shouldAssistantReply: { type: 'boolean', probability: 0 } },
-      usage: { inputTokens: 1, outputTokens: 0 },
-      warnings: [],
-    });
     const threadId = await createGroup(false);
 
     await expect(
@@ -118,23 +113,16 @@ describe('Assistant reply selection with stored conversation participants', () =
         isAssistantMentioned: true,
       }),
     ).resolves.toBe(true);
-    expect(models.evaluate).toHaveBeenCalledTimes(1);
+    expect(models.evaluate).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    'preserves the mention default after an evaluation failure when mentioned is %s',
-    async (isAssistantMentioned) => {
-      models.enableEvaluation();
-      models.evaluate.mockRejectedValue(
-        new Error('Evaluation transport failed'),
-      );
-      const threadId = await createGroup();
+  it('stays silent on an unmentioned group message after an evaluation failure', async () => {
+    models.enableEvaluation();
+    models.evaluate.mockRejectedValue(new Error('Evaluation transport failed'));
+    const threadId = await createGroup();
 
-      await expect(
-        shouldReply({ threadId, isAssistantMentioned }),
-      ).resolves.toBe(isAssistantMentioned);
-    },
-  );
+    await expect(shouldReply({ threadId })).resolves.toBe(false);
+  });
 
   it('rechecks persisted participants when a direct chat becomes a group', async () => {
     const threadId = await context.createThread();

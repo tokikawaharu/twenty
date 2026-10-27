@@ -60,7 +60,11 @@ export class AgentChatReplyPolicyService {
       return thread.isAssistantParticipant;
     }
 
-    if (!thread.isAssistantParticipant && !isAssistantMentioned) {
+    if (isAssistantMentioned) {
+      return true;
+    }
+
+    if (!thread.isAssistantParticipant) {
       return false;
     }
 
@@ -78,7 +82,7 @@ export class AgentChatReplyPolicyService {
     }
 
     if (!this.aiEvaluationService.isAvailable()) {
-      return isAssistantMentioned;
+      return false;
     }
 
     try {
@@ -95,7 +99,7 @@ export class AgentChatReplyPolicyService {
         abortSignal: AbortSignal.timeout(ASSISTANT_REPLY_EVALUATION_TIMEOUT_MS),
         state: {
           conversation,
-          message: { text, isAssistantMentioned },
+          message: { text, isAssistantMentioned: false },
         },
         questions: {
           shouldAssistantReply: {
@@ -112,7 +116,7 @@ export class AgentChatReplyPolicyService {
         answer.type === 'boolean' &&
         answer.probability >= ASSISTANT_REPLY_PROBABILITY_THRESHOLD;
 
-      return isAssistantMentioned || isReplySelected;
+      return isReplySelected;
     } catch (error) {
       this.logger.warn(
         doNotTranslate(
@@ -120,7 +124,7 @@ export class AgentChatReplyPolicyService {
         ),
       );
 
-      return isAssistantMentioned;
+      return false;
     }
   }
 }

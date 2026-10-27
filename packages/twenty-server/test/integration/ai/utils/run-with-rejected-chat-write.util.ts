@@ -4,6 +4,19 @@ import { getWorkspaceSchemaName } from 'src/engine/workspace-datasource/utils/ge
 import { escapeLiteral } from 'src/engine/workspace-manager/workspace-migration/utils/remove-sql-injection.util';
 
 const CHAT_WRITE_REJECTION_PREFIX = 'reject_chat_write_';
+const CHAT_WRITE_REJECTION_OPERATIONS = {
+  restore: {
+    tableName: 'agentChatThread',
+    triggerOperations: 'UPDATE',
+    condition:
+      'NEW.id = TG_ARGV[0]::uuid AND OLD."deletedAt" IS NOT NULL AND NEW."deletedAt" IS NULL',
+  },
+  share: {
+    tableName: 'recordShare',
+    triggerOperations: 'INSERT OR UPDATE',
+    condition: 'NEW."recordId" = TG_ARGV[0]::uuid',
+  },
+};
 
 export const runWithRejectedChatWrite = async <TResult>({
   workspaceId,
@@ -18,13 +31,8 @@ export const runWithRejectedChatWrite = async <TResult>({
 }): Promise<TResult> => {
   const schema = getWorkspaceSchemaName(workspaceId);
   const triggerName = `${CHAT_WRITE_REJECTION_PREFIX}${randomUUID()}`;
-  const tableName = operation === 'restore' ? 'agentChatThread' : 'recordShare';
-  const triggerOperations =
-    operation === 'restore' ? 'UPDATE' : 'INSERT OR UPDATE';
-  const condition =
-    operation === 'restore'
-      ? 'NEW.id = TG_ARGV[0]::uuid AND OLD."deletedAt" IS NOT NULL AND NEW."deletedAt" IS NULL'
-      : 'NEW."recordId" = TG_ARGV[0]::uuid';
+  const { tableName, triggerOperations, condition } =
+    CHAT_WRITE_REJECTION_OPERATIONS[operation];
 
   await global.testDataSource.query(
     `CREATE FUNCTION "${schema}"."${triggerName}"() RETURNS trigger LANGUAGE plpgsql AS $body$

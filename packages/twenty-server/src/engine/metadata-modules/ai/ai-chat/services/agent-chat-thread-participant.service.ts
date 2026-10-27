@@ -210,13 +210,15 @@ export class AgentChatThreadParticipantService {
   async moveMembersToInbox({
     participantWorkspaceMemberIds,
     isMention = false,
-    ...args
+    ...threadAccessArguments
   }: AgentChatThreadAccessArgs & {
     participantWorkspaceMemberIds: string[];
     isMention?: boolean;
   }): Promise<AgentChatThreadParticipantRow[]> {
     const memberIds = [...new Set(participantWorkspaceMemberIds)]
-      .filter((memberId) => memberId !== args.workspaceMemberId)
+      .filter(
+        (memberId) => memberId !== threadAccessArguments.workspaceMemberId,
+      )
       .sort();
 
     if (!isNonEmptyArray(memberIds)) {
@@ -224,12 +226,12 @@ export class AgentChatThreadParticipantService {
     }
 
     await this.sharingService.getThreadWithAccess({
-      ...args,
+      ...threadAccessArguments,
       operationType: 'update',
     });
     const eligibleMemberIds =
       await this.sharingService.findEligibleParticipantWorkspaceMemberIds({
-        ...args,
+        ...threadAccessArguments,
         memberIds,
         shouldConsiderNewShares: false,
       });
@@ -240,26 +242,26 @@ export class AgentChatThreadParticipantService {
 
     const objectMetadataId =
       await this.sharingService.getParticipantObjectMetadataId(
-        args.workspaceId,
+        threadAccessArguments.workspaceId,
       );
     const participantTable = getAgentChatThreadParticipantTable(
-      args.workspaceId,
+      threadAccessArguments.workspaceId,
     );
     const writes = await this.threadRepository.query(
-      args.workspaceId,
+      threadAccessArguments.workspaceId,
       async ({ manager }) => {
         await manager.query(
           doNotTranslate(`SELECT pg_advisory_xact_lock(hashtextextended($1 || ':' || member_id::text, 0))
           FROM unnest($2::uuid[]) member_id ORDER BY member_id`),
           [
-            `${AGENT_CHAT_THREAD_PARTICIPANT_LOCK_KEY_PREFIX}${args.workspaceId}:${args.threadId}`,
+            `${AGENT_CHAT_THREAD_PARTICIPANT_LOCK_KEY_PREFIX}${threadAccessArguments.workspaceId}:${threadAccessArguments.threadId}`,
             memberIds,
           ],
         );
         const before = await manager.query<AgentChatThreadParticipantRow[]>(
           doNotTranslate(`SELECT ${PARTICIPANT_COLUMNS} FROM ${participantTable}
           WHERE "threadId" = $1 AND "workspaceMemberId" = ANY($2::uuid[])`),
-          [args.threadId, memberIds],
+          [threadAccessArguments.threadId, memberIds],
         );
         const after = await manager.query<AgentChatThreadParticipantRow[]>(
           doNotTranslate(`WITH written_participant AS (
@@ -273,12 +275,17 @@ export class AgentChatThreadParticipantService {
           RETURNING *
         ), owner_share AS (
           ${buildAgentChatThreadParticipantOwnerShareInsert({
-            workspaceId: args.workspaceId,
+            workspaceId: threadAccessArguments.workspaceId,
             participantSource: 'written_participant',
             objectMetadataIdParameter: '$3',
           })}
         ) SELECT ${PARTICIPANT_COLUMNS} FROM written_participant`),
-          [args.threadId, memberIds, objectMetadataId, isMention],
+          [
+            threadAccessArguments.threadId,
+            memberIds,
+            objectMetadataId,
+            isMention,
+          ],
         );
         const beforeByMemberId = new Map(
           before.map((participant) => [
@@ -296,7 +303,7 @@ export class AgentChatThreadParticipantService {
 
     for (const write of writes) {
       await this.participantEventService.emitParticipantWritten({
-        workspaceId: args.workspaceId,
+        workspaceId: threadAccessArguments.workspaceId,
         ...write,
       });
     }

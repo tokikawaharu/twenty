@@ -7,6 +7,7 @@ import {
   MetadataReadability,
   type ObjectRecord,
   type ObjectsPermissions,
+  type RecordShareAccessLevel,
 } from 'twenty-shared/types';
 import { assertUnreachable, isDefined } from 'twenty-shared/utils';
 import {
@@ -2514,10 +2515,12 @@ export class WorkspaceRepository<TEntity extends ObjectLiteral = ObjectRecord> {
     subject,
     operationType,
     depth = 0,
+    hypotheticalRecordShareAccessLevel,
   }: {
     subject: RowAccessPolicySubject;
     operationType: OperationType;
     depth?: number;
+    hypotheticalRecordShareAccessLevel?: RecordShareAccessLevel;
   }): RowAccessPolicy {
     return buildRowAccessPolicy({
       subject,
@@ -2526,6 +2529,7 @@ export class WorkspaceRepository<TEntity extends ObjectLiteral = ObjectRecord> {
       flatObjectMetadata: this.options.flatObjectMetadata,
       operationType,
       depth,
+      hypotheticalRecordShareAccessLevel,
     });
   }
 

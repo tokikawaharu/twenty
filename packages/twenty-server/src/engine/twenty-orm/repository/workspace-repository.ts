@@ -2462,10 +2462,10 @@ export class WorkspaceRepository<TEntity extends ObjectLiteral = ObjectRecord> {
         continue;
       }
 
-      const [row] = await queryBuilder.getRawMany<Record<string, unknown>>();
+      const [row] = await queryBuilder.getRawMany<Record<string, boolean>>();
 
       for (const subjectId of subjectIds) {
-        if (row?.[subjectId] !== true) {
+        if (!row?.[subjectId]) {
           continue;
         }
 

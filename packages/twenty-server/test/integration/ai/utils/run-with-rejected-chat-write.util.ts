@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { getWorkspaceSchemaName } from 'src/engine/workspace-datasource/utils/get-workspace-schema-name.util';
+import { escapeLiteral } from 'src/engine/workspace-manager/workspace-migration/utils/remove-sql-injection.util';
 
 const CHAT_WRITE_REJECTION_PREFIX = 'reject_chat_write_';
 
@@ -22,8 +23,8 @@ export const runWithRejectedChatWrite = async <TResult>({
     operation === 'restore' ? 'UPDATE' : 'INSERT OR UPDATE';
   const condition =
     operation === 'restore'
-      ? `NEW.id = '${threadId}' AND OLD."deletedAt" IS NOT NULL AND NEW."deletedAt" IS NULL`
-      : `NEW."recordId" = '${threadId}'`;
+      ? 'NEW.id = TG_ARGV[0]::uuid AND OLD."deletedAt" IS NOT NULL AND NEW."deletedAt" IS NULL'
+      : 'NEW."recordId" = TG_ARGV[0]::uuid';
 
   await global.testDataSource.query(
     `CREATE FUNCTION "${schema}"."${triggerName}"() RETURNS trigger LANGUAGE plpgsql AS $body$
@@ -37,7 +38,7 @@ export const runWithRejectedChatWrite = async <TResult>({
   try {
     await global.testDataSource.query(
       `CREATE TRIGGER "${triggerName}" BEFORE ${triggerOperations} ON "${schema}"."${tableName}"
-       FOR EACH ROW EXECUTE FUNCTION "${schema}"."${triggerName}"()`,
+       FOR EACH ROW EXECUTE FUNCTION "${schema}"."${triggerName}"(${escapeLiteral(threadId)})`,
     );
 
     return await work();

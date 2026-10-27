@@ -5,7 +5,7 @@ import { configureChatParticipationModels } from 'test/integration/ai/utils/conf
 import { createChatParticipationTestContext } from 'test/integration/ai/utils/create-chat-participation-test-context.util';
 import { runWithRejectedChatWrite } from 'test/integration/ai/utils/run-with-rejected-chat-write.util';
 import { runWithReadOnlyChatPermission } from 'test/integration/ai/utils/run-with-read-only-chat-permission.util';
-import { waitForBlockedDatabaseQuery } from 'test/integration/ai/utils/wait-for-blocked-database-query.util';
+import { waitForBlockedDatabaseQueryOrThrow } from 'test/integration/ai/utils/wait-for-blocked-database-query-or-throw.util';
 import { sendChatParticipationMessage } from 'test/integration/graphql/utils/send-chat-participation-message.util';
 import { makeMetadataApiRequest } from 'test/integration/metadata/suites/utils/make-metadata-api-request.util';
 import { getAppProviderByClassName } from 'test/integration/utils/get-app-provider-by-class-name.util';
@@ -473,7 +473,7 @@ describe('Shared conversation API boundaries', () => {
     }).then((response) => response);
 
     try {
-      await waitForBlockedDatabaseQuery(pid);
+      await waitForBlockedDatabaseQueryOrThrow(pid);
       await runner.commitTransaction();
       const response = await sending;
 

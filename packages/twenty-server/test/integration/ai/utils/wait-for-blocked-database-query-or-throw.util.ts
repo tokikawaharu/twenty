@@ -1,7 +1,11 @@
+import { fail } from 'node:assert';
+
 const DATABASE_WAITER_TIMEOUT_MS = 5_000;
 const DATABASE_WAITER_POLL_INTERVAL_MS = 20;
 
-export const waitForBlockedDatabaseQuery = async (blockingPid: number) => {
+export const waitForBlockedDatabaseQueryOrThrow = async (
+  blockingPid: number,
+) => {
   const deadline = Date.now() + DATABASE_WAITER_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
@@ -20,7 +24,5 @@ export const waitForBlockedDatabaseQuery = async (blockingPid: number) => {
     );
   }
 
-  throw new Error(
-    'The competing conversation creation did not wait for its ID',
-  );
+  fail('The competing conversation creation did not wait for its ID');
 };

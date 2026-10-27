@@ -1,29 +1,34 @@
-// KEYS: virtual time, rebase base, rebase state, BullMQ prioritized key. ARGV: job key, rebase threshold, rebase step, ticket offset, old-scale floor. Returns 0, 1 when this dispatch started a rebase, 2 while one is in progress
+// KEYS: virtual time, rebase base, rebase state. ARGV: job key, rebase threshold, rebase step, ticket offset. Returns 0, 1 when this dispatch started a rebase, 2 while one is in progress
 export const FAIR_DISPATCH_SCRIPT = `
 local virtualTime = tonumber(redis.call('GET', KEYS[1]) or '0')
+local base = tonumber(redis.call('GET', KEYS[2]) or '0')
+local isRebasing = redis.call('EXISTS', KEYS[3]) == 1
 local threshold = tonumber(ARGV[2])
 local step = tonumber(ARGV[3])
 local ticketOffset = tonumber(ARGV[4])
-local oldScaleFloor = tonumber(ARGV[5])
-local isRebasing = redis.call('EXISTS', KEYS[3]) == 1
-local priority = tonumber(redis.call('HGET', ARGV[1], 'priority'))
+local job = redis.call('HMGET', ARGV[1], 'priority', 'fairBase', 'opts')
+local priority = tonumber(job[1])
 
 if priority == nil or priority < ticketOffset then
   return isRebasing and 2 or 0
 end
 
+-- the base a ticket was reserved on travels in the job options, then in the hash once a rebase touched the job
+local rawOptions = type(job[3]) == 'string' and job[3] or ''
+local jobBase = tonumber(job[2]) or tonumber(string.match(rawOptions, '"fairBase":(%d+)') or '') or base
+local shift = base - jobBase
 local ticket = priority - ticketOffset
 
-if (isRebasing and ticket >= oldScaleFloor) or ticket - virtualTime >= step then
-  ticket = ticket - step
-  redis.call('HSET', ARGV[1], 'priority', ticket + ticketOffset)
+if shift > 0 and ticket >= shift then
+  ticket = ticket - shift
+  redis.call('HSET', ARGV[1], 'priority', ticket + ticketOffset, 'fairBase', base)
 end
 
 if ticket > virtualTime then
   virtualTime = ticket
 end
 
-if isRebasing or virtualTime < threshold or redis.call('ZCARD', KEYS[4]) >= oldScaleFloor - (virtualTime - step) then
+if isRebasing or virtualTime < threshold then
   redis.call('SET', KEYS[1], virtualTime)
 
   return isRebasing and 2 or 0
@@ -31,7 +36,7 @@ end
 
 redis.call('SET', KEYS[1], virtualTime - step)
 redis.call('INCRBY', KEYS[2], step)
-redis.call('SET', KEYS[3], 'p:' .. string.format('%.0f', (oldScaleFloor + ticketOffset) * 4294967296 - 1))
+redis.call('HSET', KEYS[3], 'phase', 'p', 'cursor', '0', 'virtualTime', virtualTime)
 
 return 1
 `;

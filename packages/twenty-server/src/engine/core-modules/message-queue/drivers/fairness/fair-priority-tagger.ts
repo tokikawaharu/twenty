@@ -11,7 +11,6 @@ import {
   FAIR_REBASE_CHUNK_SIZE,
   FAIR_REBASE_GRACE_MS,
   FAIR_REBASE_MAX_CHUNKS,
-  FAIR_REBASE_OLD_SCALE_FLOOR,
   FAIR_REBASE_STEP,
   FAIR_REBASE_THRESHOLD,
   FAIR_TICKET_OFFSET,
@@ -23,6 +22,9 @@ import { type MessageQueue } from 'src/engine/core-modules/message-queue/message
 export type FairReservation = { groupKeys: string[]; batchSize: number };
 
 export type FairTicket = { tag: number; weight: number };
+
+// The base is the scale the tickets were reserved on; a job carries it so a rebase shifts it exactly once
+export type FairTickets = { base: number; tickets: FairTicket[] };
 
 type FairPriorityTaggerOptions = {
   getClient: (queueName: MessageQueue) => Promise<RedisClient>;
@@ -63,7 +65,7 @@ export class FairPriorityTagger {
   }: {
     queueName: MessageQueue;
     reservations: FairReservation[];
-  }): Promise<FairTicket[] | undefined> {
+  }): Promise<FairTickets | undefined> {
     try {
       const distinctGroupKeys = [
         ...new Set(reservations.flatMap(({ groupKeys }) => groupKeys)),
@@ -94,12 +96,12 @@ export class FairPriorityTagger {
           ]),
         ],
       });
-      const tickets = this.parseTickets({
+      const fairTickets = this.parseTickets({
         rawTickets,
         count: reservations.length,
       });
 
-      if (!isDefined(tickets)) {
+      if (!isDefined(fairTickets)) {
         this.warn({
           queueName,
           action: 'parse the fair tickets',
@@ -109,7 +111,7 @@ export class FairPriorityTagger {
         return undefined;
       }
 
-      return tickets;
+      return fairTickets;
     } catch (error) {
       this.warn({ queueName, action: 'reserve the fair tickets', error });
 
@@ -134,14 +136,12 @@ export class FairPriorityTagger {
             this.buildFairKey({ queueName, suffix: 'vtime' }),
             this.buildFairKey({ queueName, suffix: 'base' }),
             this.buildFairKey({ queueName, suffix: 'rebase' }),
-            this.buildQueueKey({ queueName, suffix: 'prioritized' }),
           ],
           args: [
             this.buildQueueKey({ queueName, suffix: jobId }),
             FAIR_REBASE_THRESHOLD,
             FAIR_REBASE_STEP,
             FAIR_TICKET_OFFSET,
-            FAIR_REBASE_OLD_SCALE_FLOOR,
           ],
         }),
       );
@@ -160,7 +160,7 @@ export class FairPriorityTagger {
     }
   }
 
-  // Rewrites the old-scale tickets one bounded chunk at a time, so Redis is never held for a whole backlog
+  // Rewrites the tickets of the old scale one bounded chunk at a time, so Redis is never held for a whole backlog
   rebase(queueName: MessageQueue): Promise<void> {
     const rebaseInProgress = this.rebasesInProgress.get(queueName);
 
@@ -188,14 +188,15 @@ export class FairPriorityTagger {
             this.buildQueueKey({ queueName, suffix: 'prioritized' }),
             this.buildQueueKey({ queueName, suffix: 'delayed' }),
             this.buildQueueKey({ queueName, suffix: 'active' }),
+            this.buildFairKey({ queueName, suffix: 'base' }),
           ],
           args: [
             FAIR_REBASE_STEP,
-            FAIR_TICKET_OFFSET + FAIR_REBASE_OLD_SCALE_FLOOR,
             FAIR_REBASE_CHUNK_SIZE,
             this.buildQueueKey({ queueName, suffix: '' }),
             Date.now(),
             this.options.rebaseGraceMs ?? FAIR_REBASE_GRACE_MS,
+            FAIR_TICKET_OFFSET,
           ],
         });
         const rebaseResult = this.parseRebaseResult(rawResult);
@@ -262,10 +263,11 @@ export class FairPriorityTagger {
   }: {
     rawTickets: unknown;
     count: number;
-  }): FairTicket[] | undefined {
-    const values = String(rawTickets).split(' ');
+  }): FairTickets | undefined {
+    const [rawBase, ...values] = String(rawTickets).split(' ');
+    const base = Number(rawBase);
 
-    if (values.length !== 2 * count) {
+    if (!Number.isInteger(base) || base < 0 || values.length !== 2 * count) {
       return undefined;
     }
 
@@ -277,7 +279,7 @@ export class FairPriorityTagger {
     return tickets.every(
       ({ tag, weight }) => Number.isFinite(tag) && weight > 0,
     )
-      ? tickets
+      ? { base, tickets }
       : undefined;
   }
 

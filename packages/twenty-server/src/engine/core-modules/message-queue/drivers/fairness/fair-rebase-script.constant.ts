@@ -1,35 +1,47 @@
-// KEYS: rebase state, BullMQ prioritized, delayed and active keys. ARGV: rebase step, old-scale priority floor, chunk size, job key prefix, now, grace ms. Rewrites one chunk of old-scale tickets; returns {1, 0} to continue, {2, wait ms} during the grace period, {0, 0} once done
+// KEYS: rebase state, BullMQ prioritized, delayed and active keys, rebase base. ARGV: rebase step, chunk size, job key prefix, now, grace ms, ticket offset. Rewrites one chunk of tickets reserved on an older scale; returns {1, 0} to continue, {2, wait ms} during the grace period, {0, 0} once done
 export const FAIR_REBASE_SCRIPT = `
-local state = redis.call('GET', KEYS[1])
+local state = redis.call('HMGET', KEYS[1], 'phase', 'cursor', 'virtualTime')
+local phase = state[1]
 
-if not state then
+if not phase then
   return {0, 0}
 end
 
+local cursor = tonumber(state[2])
+local oldVirtualTime = tonumber(state[3])
+local base = tonumber(redis.call('GET', KEYS[5]) or '0')
 local step = tonumber(ARGV[1])
-local oldScaleFloor = tonumber(ARGV[2])
-local chunkSize = tonumber(ARGV[3])
-local prefix = ARGV[4]
-local now = tonumber(ARGV[5])
-local phase, cursor = string.match(state, '^(%a):(.+)$')
+local chunkSize = tonumber(ARGV[2])
+local prefix = ARGV[3]
+local now = tonumber(ARGV[4])
+local ticketOffset = tonumber(ARGV[6])
+local scoreBase = 4294967296
 
-cursor = tonumber(cursor)
-
-local function formatCursor(value)
+local function formatScore(value)
   return string.format('%.0f', value)
 end
 
+-- A job shifts by the scales its ticket missed; a ticket under that shift is overdue on either scale and keeps its value, as do static and urgent priorities
 local function rebaseJob(jobId)
   local jobKey = prefix .. jobId
-  local priority = tonumber(redis.call('HGET', jobKey, 'priority'))
+  local job = redis.call('HMGET', jobKey, 'priority', 'fairBase', 'opts')
+  local priority = tonumber(job[1])
 
-  if priority == nil or priority < oldScaleFloor then
-    return false
+  if priority == nil then
+    return 0
   end
 
-  redis.call('HSET', jobKey, 'priority', priority - step)
+  local rawOptions = type(job[3]) == 'string' and job[3] or ''
+  local jobBase = tonumber(job[2]) or tonumber(string.match(rawOptions, '"fairBase":(%d+)') or '') or base
+  local shift = base - jobBase
 
-  return true
+  if shift <= 0 or priority - ticketOffset < shift then
+    return 0
+  end
+
+  redis.call('HSET', jobKey, 'priority', priority - shift, 'fairBase', base)
+
+  return shift
 end
 
 if phase == 'g' then
@@ -37,7 +49,8 @@ if phase == 'g' then
     return {2, cursor - now}
   end
 
-  redis.call('SET', KEYS[1], 'f:' .. formatCursor(oldScaleFloor * 4294967296 - 1))
+  -- a reservation lands within milliseconds, so a ticket inserted after the first pass went by sits within half a step of the old virtual time
+  redis.call('HSET', KEYS[1], 'phase', 'f', 'cursor', formatScore((oldVirtualTime - step / 2 + ticketOffset) * scoreBase - 1))
 
   return {1, 0}
 end
@@ -45,13 +58,14 @@ end
 local processed = 0
 
 if phase == 'p' or phase == 'f' then
-  local members = redis.call('ZRANGEBYSCORE', KEYS[2], '(' .. formatCursor(cursor), '+inf', 'WITHSCORES', 'LIMIT', 0, chunkSize)
+  local members = redis.call('ZRANGEBYSCORE', KEYS[2], '(' .. formatScore(cursor), '+inf', 'WITHSCORES', 'LIMIT', 0, chunkSize)
 
   for i = 1, #members, 2 do
     local score = tonumber(members[i + 1])
+    local shift = rebaseJob(members[i])
 
-    if rebaseJob(members[i]) then
-      redis.call('ZADD', KEYS[2], score - step * 4294967296, members[i])
+    if shift > 0 then
+      redis.call('ZADD', KEYS[2], formatScore(score - shift * scoreBase), members[i])
     end
 
     cursor = score
@@ -68,7 +82,7 @@ elseif phase == 'a' then
   cursor = cursor + #jobIds
   processed = #jobIds
 elseif phase == 'd' then
-  local members = redis.call('ZRANGEBYSCORE', KEYS[3], '(' .. formatCursor(cursor), '+inf', 'WITHSCORES', 'LIMIT', 0, chunkSize)
+  local members = redis.call('ZRANGEBYSCORE', KEYS[3], '(' .. formatScore(cursor), '+inf', 'WITHSCORES', 'LIMIT', 0, chunkSize)
 
   for i = 1, #members, 2 do
     rebaseJob(members[i])
@@ -87,7 +101,7 @@ if processed < chunkSize then
     cursor = 0
   elseif phase == 'd' then
     phase = 'g'
-    cursor = now + tonumber(ARGV[6])
+    cursor = now + tonumber(ARGV[5])
   else
     redis.call('DEL', KEYS[1])
 
@@ -95,7 +109,7 @@ if processed < chunkSize then
   end
 end
 
-redis.call('SET', KEYS[1], phase .. ':' .. formatCursor(cursor))
+redis.call('HSET', KEYS[1], 'phase', phase, 'cursor', formatScore(cursor))
 
 return {1, 0}
 `;

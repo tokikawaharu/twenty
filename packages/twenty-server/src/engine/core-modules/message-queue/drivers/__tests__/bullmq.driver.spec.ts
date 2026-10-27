@@ -4,6 +4,7 @@ import { DEFAULT_JOB_PRIORITY } from 'src/engine/core-modules/message-queue/cons
 import { QUEUE_JOB_CHANGED_EVENT } from 'src/engine/core-modules/message-queue/constants/queue-job-changed-event.constant';
 import { BullMQDriver } from 'src/engine/core-modules/message-queue/drivers/bullmq.driver';
 import {
+  FAIR_REBASE_STEP,
   FAIR_TICKET_OFFSET,
   URGENT_FAIR_PRIORITY,
 } from 'src/engine/core-modules/message-queue/drivers/fairness/fair-priority.constant';
@@ -516,7 +517,10 @@ describe('BullMQDriver fair tickets', () => {
   });
 
   it('ranks a job by the ticket of its workspace', async () => {
-    mockReserve.mockResolvedValue([{ tag: 7, weight: 1 }]);
+    mockReserve.mockResolvedValue({
+      base: FAIR_REBASE_STEP,
+      tickets: [{ tag: 7, weight: 1 }],
+    });
 
     await driver.add(MessageQueue.workspaceQueue, 'job', {
       workspaceId: 'ws-1',
@@ -529,15 +533,21 @@ describe('BullMQDriver fair tickets', () => {
     expect(mockAdd).toHaveBeenCalledWith(
       'job',
       { workspaceId: 'ws-1' },
-      expect.objectContaining({ priority: FAIR_TICKET_OFFSET + 7 }),
+      expect.objectContaining({
+        priority: FAIR_TICKET_OFFSET + 7,
+        fairBase: FAIR_REBASE_STEP,
+      }),
     );
   });
 
   it('reserves one ticket per group of a bulk and spaces its jobs by the weight', async () => {
-    mockReserve.mockResolvedValue([
-      { tag: 10, weight: 0.5 },
-      { tag: 0, weight: 1 },
-    ]);
+    mockReserve.mockResolvedValue({
+      base: 0,
+      tickets: [
+        { tag: 10, weight: 0.5 },
+        { tag: 0, weight: 1 },
+      ],
+    });
 
     await driver.bulkAdd(MessageQueue.workspaceQueue, 'job', [
       { data: { workspaceId: 'ws-1' } },
@@ -564,7 +574,10 @@ describe('BullMQDriver fair tickets', () => {
   });
 
   it('gives an urgent job the lane priority while still charging its group keys', async () => {
-    mockReserve.mockResolvedValue([{ tag: 7, weight: 1 }]);
+    mockReserve.mockResolvedValue({
+      base: 0,
+      tickets: [{ tag: 7, weight: 1 }],
+    });
 
     await driver.add(
       MessageQueue.workspaceQueue,

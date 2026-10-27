@@ -25,6 +25,8 @@ export class AgentChatReplyPolicyService {
   ) {}
 
   async shouldReply({
+    isAiChatInboxEnabled,
+    shouldAssistantReply,
     thread,
     workspaceId,
     workspaceMemberId,
@@ -33,14 +35,31 @@ export class AgentChatReplyPolicyService {
     isAssistantMentioned,
     text,
   }: {
-    thread: AgentChatThreadWorkspaceEntity;
+    isAiChatInboxEnabled: boolean;
+    shouldAssistantReply: boolean;
+    thread: Pick<
+      AgentChatThreadWorkspaceEntity,
+      'id' | 'isAssistantParticipant'
+    >;
     workspaceId: string;
     workspaceMemberId: string;
     userWorkspaceId: string;
     additionalWorkspaceMemberIds: string[];
-    isAssistantMentioned: boolean;
+    isAssistantMentioned?: boolean | null;
     text: string;
   }): Promise<boolean> {
+    if (!isAiChatInboxEnabled) {
+      return true;
+    }
+
+    if (!shouldAssistantReply) {
+      return false;
+    }
+
+    if (!isDefined(isAssistantMentioned)) {
+      return thread.isAssistantParticipant;
+    }
+
     if (!thread.isAssistantParticipant && !isAssistantMentioned) {
       return false;
     }

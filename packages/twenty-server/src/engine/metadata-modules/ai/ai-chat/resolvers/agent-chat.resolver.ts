@@ -309,37 +309,6 @@ export class AgentChatResolver {
     });
   }
 
-  private async shouldReplyToMessage({
-    isAiChatInboxEnabled,
-    shouldAssistantReply,
-    isAssistantMentioned,
-    ...replyArguments
-  }: Omit<
-    Parameters<AgentChatReplyPolicyService['shouldReply']>[0],
-    'isAssistantMentioned'
-  > & {
-    isAiChatInboxEnabled: boolean;
-    shouldAssistantReply: boolean;
-    isAssistantMentioned?: boolean | null;
-  }): Promise<boolean> {
-    if (!isAiChatInboxEnabled) {
-      return true;
-    }
-
-    if (!shouldAssistantReply) {
-      return false;
-    }
-
-    if (!isDefined(isAssistantMentioned)) {
-      return replyArguments.thread.isAssistantParticipant;
-    }
-
-    return this.replyPolicyService.shouldReply({
-      ...replyArguments,
-      isAssistantMentioned,
-    });
-  }
-
   private async sendChatMessageToThread({
     threadId,
     text,
@@ -381,20 +350,13 @@ export class AgentChatResolver {
 
     const isInitialMessage =
       isAiChatInboxEnabled &&
-      !(await this.agentChatService.hasMessages({
-        threadId,
-        workspaceId: workspace.id,
-      }));
-
-    if (isInitialMessage) {
-      await this.threadService.setInitialAssistantParticipation({
+      (await this.threadService.setInitialAssistantParticipation({
         threadId,
         workspaceId: workspace.id,
         workspaceMemberId,
         isAssistantParticipant:
           (isAssistantMentioned ?? false) || initialIsAssistantParticipant,
-      });
-    }
+      }));
     const candidateWorkspaceMemberIds = [
       ...mentionedWorkspaceMemberIds,
       ...(isInitialMessage ? recipientWorkspaceMemberIds : []),
@@ -411,10 +373,13 @@ export class AgentChatResolver {
     const isAssistantParticipating = isInitialMessage
       ? initialIsAssistantParticipant
       : thread.isAssistantParticipant;
-    const isAssistantReplying = await this.shouldReplyToMessage({
+    const isAssistantReplying = await this.replyPolicyService.shouldReply({
       isAiChatInboxEnabled,
       shouldAssistantReply,
-      thread: { ...thread, isAssistantParticipant: isAssistantParticipating },
+      thread: {
+        id: thread.id,
+        isAssistantParticipant: isAssistantParticipating,
+      },
       workspaceId: workspace.id,
       workspaceMemberId,
       userWorkspaceId,

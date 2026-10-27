@@ -1,3 +1,5 @@
+import { ok } from 'node:assert';
+
 import { getAppProviderByClassName } from 'test/integration/utils/get-app-provider-by-class-name.util';
 import { STANDARD_OBJECTS } from 'twenty-shared/metadata';
 import { isDefined } from 'twenty-shared/utils';
@@ -30,9 +32,7 @@ export const runWithReadOnlyChatPermission = async <TResult>({
   ]);
   const roleId = userWorkspaceRoleMap[userWorkspaceId];
 
-  if (!isDefined(roleId)) {
-    throw new Error('The seeded chat member has no role');
-  }
+  ok(isDefined(roleId), 'The seeded chat member has no role');
 
   const roleUniversalIdentifier = flatRoleMaps.universalIdentifierById[roleId];
   const objectMetadata =
@@ -40,9 +40,10 @@ export const runWithReadOnlyChatPermission = async <TResult>({
       STANDARD_OBJECTS.agentChatThread.universalIdentifier
     ];
 
-  if (!isDefined(roleUniversalIdentifier) || !isDefined(objectMetadata)) {
-    throw new Error('The seeded chat permission metadata is missing');
-  }
+  ok(
+    isDefined(roleUniversalIdentifier) && isDefined(objectMetadata),
+    'The seeded chat permission metadata is missing',
+  );
 
   const originalObjectPermissions = Object.values(
     flatObjectPermissionMaps.byUniversalIdentifier,
